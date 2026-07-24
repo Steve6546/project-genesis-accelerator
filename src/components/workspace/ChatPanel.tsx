@@ -710,6 +710,8 @@ const SLASH_COMMANDS: Array<{ cmd: string; desc: string; template: string }> = [
   { cmd: "/rollback", desc: "Undo the last agent change", template: "/rollback" },
 ];
 
+type Attachment = { url: string; mediaType: string; name: string };
+
 function ChatComposer({
   input,
   setInput,
@@ -717,6 +719,9 @@ function ChatComposer({
   isLoading,
   allFilePaths,
   inputRef,
+  attachments,
+  setAttachments,
+  threadId,
 }: {
   input: string;
   setInput: (v: string) => void;
@@ -724,7 +729,42 @@ function ChatComposer({
   isLoading: boolean;
   allFilePaths: string[];
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
+  attachments: Attachment[];
+  setAttachments: React.Dispatch<React.SetStateAction<Attachment[]>>;
+  threadId: string;
 }) {
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const uploadImage = async (file: File) => {
+    if (!file.type.startsWith("image/")) return;
+    if (file.size > 5 * 1024 * 1024) {
+      alert("Image too large (max 5 MB)");
+      return;
+    }
+    setUploading(true);
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      const uid = sess.session?.user.id;
+      if (!uid) throw new Error("Not signed in");
+      const ext = file.name.split(".").pop()?.toLowerCase() ?? "png";
+      const path = `${uid}/${threadId}/${crypto.randomUUID()}.${ext}`;
+      const up = await supabase.storage.from("chat-attachments").upload(path, file, {
+        contentType: file.type,
+        upsert: false,
+      });
+      if (up.error) throw up.error;
+      const signed = await supabase.storage.from("chat-attachments").createSignedUrl(path, 60 * 60 * 24 * 7);
+      if (signed.error || !signed.data?.signedUrl) throw signed.error ?? new Error("Sign URL failed");
+      setAttachments((prev) => [...prev, { url: signed.data.signedUrl, mediaType: file.type, name: file.name }]);
+    } catch (e) {
+      console.error(e);
+      alert(`Upload failed: ${(e as Error).message}`);
+    } finally {
+      setUploading(false);
+    }
+  };
+
   // Auto-grow textarea between 2 and 6 rows
   useEffect(() => {
     const el = inputRef.current;
