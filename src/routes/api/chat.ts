@@ -474,6 +474,48 @@ function makeTools(
         }
       },
     }),
+    // --- Verification / sandbox tools (edge-runtime honest stubs) ---------
+    // The agent runs on Cloudflare Workers and cannot spawn child processes,
+    // so we can't invoke vitest / tsgo / eslint directly. Instead we return
+    // a structured "run locally" result plus a lightweight structural check
+    // on the requested paths so the agent still sees actionable feedback.
+    run_typecheck: tool({
+      description:
+        "Structural check on TS/TSX/JS/JSX/CSS files: balanced brackets, non-empty writes, valid JSON. Fast, runs in-worker. Use after write_file/edit_file to confirm the patch didn't corrupt the file. Not a full tsc — for full type-checking, run `bun tsgo --noEmit` locally.",
+      inputSchema: z.object({ paths: z.array(z.string()).min(1).max(50) }),
+      execute: async ({ paths }) => {
+        const { data: rows } = await supabase
+          .from("files")
+          .select("path, content")
+          .eq("project_id", projectId)
+          .eq("is_folder", false)
+          .in("path", paths);
+        if (!rows?.length) return { ok: false, error: "No matching files found" };
+        const { verifyPatches } = await import("@/lib/agent-engine.server");
+        const res = verifyPatches(rows.map((r) => ({ path: r.path, content: r.content })));
+        return { ok: res.ok, checked: res.checked, issues: res.issues };
+      },
+    }),
+    run_tests: tool({
+      description:
+        "NOT AVAILABLE in edge runtime. Returns a note explaining that vitest must be run locally. Only call this if the user explicitly asks for tests, so you can report the limitation.",
+      inputSchema: z.object({ pattern: z.string().optional() }),
+      execute: async ({ pattern }) => ({
+        ok: false,
+        error: "tests_run_locally",
+        note: `Cannot spawn vitest inside the Cloudflare Worker runtime. Run \`bun test${pattern ? ` ${pattern}` : ""}\` locally.`,
+      }),
+    }),
+    run_lint: tool({
+      description:
+        "NOT AVAILABLE in edge runtime. Returns a note explaining eslint must be run locally.",
+      inputSchema: z.object({ path: z.string().optional() }),
+      execute: async () => ({
+        ok: false,
+        error: "lint_run_locally",
+        note: "Cannot spawn eslint inside the Cloudflare Worker runtime. Run `bun eslint .` locally.",
+      }),
+    }),
   };
   // Aliases so the agent can use either name.
   return {
@@ -485,6 +527,7 @@ function makeTools(
     grep_search: tools.grep,
     list_dir: tools.list_files,
     symbol_search: tools.index_search,
+    verify_patches: tools.run_typecheck,
   };
 }
 
