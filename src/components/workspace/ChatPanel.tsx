@@ -693,6 +693,9 @@ export function ChatPanel({
         isLoading={isLoading}
         allFilePaths={allFilePaths}
         inputRef={inputRef}
+        attachments={attachments}
+        setAttachments={setAttachments}
+        threadId={threadId}
       />
     </div>
   );
