@@ -378,12 +378,30 @@ export function ChatPanel({
     prevStatusRef.current = status;
   }, [status, qc, projectId]);
 
+  const [attachments, setAttachments] = useState<Array<{ url: string; mediaType: string; name: string }>>([]);
+
   const submit = async () => {
     const text = input.trim();
-    if (!text || isLoading) return;
+    if ((!text && attachments.length === 0) || isLoading) return;
     setInput("");
-    await sendMessage({ text });
+    const files = attachments;
+    setAttachments([]);
+    if (files.length > 0) {
+      const parts: UIMessage["parts"] = [
+        ...(text ? [{ type: "text" as const, text }] : []),
+        ...files.map((f) => ({
+          type: "file" as const,
+          url: f.url,
+          mediaType: f.mediaType,
+          filename: f.name,
+        })),
+      ];
+      await sendMessage({ role: "user", parts } as never);
+    } else {
+      await sendMessage({ text });
+    }
   };
+
 
   const onApplied = () => qc.invalidateQueries({ queryKey: ["files", projectId] });
 
