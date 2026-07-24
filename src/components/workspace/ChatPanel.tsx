@@ -812,6 +812,14 @@ function ChatComposer({
   );
 }
 
+const STAGES = [
+  { id: "understand", label: "Understand" },
+  { id: "locate", label: "Locate" },
+  { id: "plan", label: "Plan" },
+  { id: "apply", label: "Apply" },
+  { id: "verify", label: "Verify" },
+] as const;
+
 function ThinkingBox({
   lastMessage,
   status,
@@ -827,43 +835,34 @@ function ThinkingBox({
     return () => clearInterval(id);
   }, []);
 
-  const steps = useMemo(() => {
-    const out: { id: string; icon: string; label: string; done: boolean }[] = [
-      { id: "init", icon: "🧠", label: "Analyzing your request", done: true },
-    ];
-    if (!lastMessage || lastMessage.role !== "assistant") return out;
+  // Infer the current stage from streamed parts.
+  const currentStage = useMemo<(typeof STAGES)[number]["id"]>(() => {
+    if (!lastMessage || lastMessage.role !== "assistant") return "understand";
+    const parts = (lastMessage.parts as Array<{ type: string; state?: string; toolName?: string }>) ?? [];
+    const tools = parts.filter((p) => p.type.startsWith("tool-"));
+    if (!tools.length) return status === "streaming" ? "plan" : "locate";
+    const hasWrite = tools.some((p) =>
+      ["write_file", "edit_file", "patch_file", "apply_patch", "create_file", "delete_file", "delete_path", "rename_file", "move_path"]
+        .includes(p.toolName ?? p.type.replace(/^tool-/, "")),
+    );
+    const hasVerify = tools.some((p) => {
+      const n = p.toolName ?? p.type.replace(/^tool-/, "");
+      return ["run_typecheck", "run_tests", "run_lint"].includes(n);
+    });
+    if (hasVerify) return "verify";
+    if (hasWrite) return "apply";
+    return "locate";
+  }, [lastMessage, status]);
+
+  const activeIdx = STAGES.findIndex((s) => s.id === currentStage);
+
+  const activityParts = useMemo(() => {
+    if (!lastMessage || lastMessage.role !== "assistant") return [];
     const parts = lastMessage.parts as Array<{
-      type: string;
-      state?: string;
-      toolName?: string;
+      type: string; state?: string; toolName?: string;
       input?: { path?: string; from?: string; to?: string; pattern?: string };
     }>;
-    const verbs: Record<string, { icon: string; label: (i: { path?: string; from?: string; to?: string; pattern?: string }) => string }> = {
-      read_file: { icon: "📖", label: (i) => `Reading: ${i.path ?? ""}` },
-      write_file: { icon: "📝", label: (i) => `Writing: ${i.path ?? ""}` },
-      edit_file: { icon: "✏️", label: (i) => `Patching: ${i.path ?? ""}` },
-      patch_file: { icon: "✏️", label: (i) => `Patching: ${i.path ?? ""}` },
-      delete_file: { icon: "🗑️", label: (i) => `Deleting: ${i.path ?? ""}` },
-      delete_path: { icon: "🗑️", label: (i) => `Deleting: ${i.path ?? ""}` },
-      rename_file: { icon: "🔀", label: (i) => `Renaming: ${i.from} → ${i.to}` },
-      move_path: { icon: "📦", label: (i) => `Moving: ${i.from} → ${i.to}` },
-      create_folder: { icon: "📁", label: (i) => `Creating folder: ${i.path ?? ""}` },
-      grep: { icon: "🔍", label: (i) => `Searching: ${i.pattern ?? ""}` },
-      search_project: { icon: "🔍", label: (i) => `Searching: ${i.pattern ?? ""}` },
-      list_files: { icon: "📂", label: () => `Listing project files` },
-    };
-    parts.forEach((p, idx) => {
-      if (!p.type.startsWith("tool-")) return;
-      const name = p.toolName ?? p.type.replace(/^tool-/, "");
-      const meta = verbs[name] ?? { icon: "⚙️", label: () => name };
-      out.push({
-        id: `${idx}-${name}`,
-        icon: meta.icon,
-        label: meta.label(p.input ?? {}),
-        done: p.state === "output-available",
-      });
-    });
-    return out;
+    return parts.filter((p) => p.type.startsWith("tool-")).slice(-6);
   }, [lastMessage]);
 
   return (
@@ -877,46 +876,70 @@ function ThinkingBox({
       </div>
       <div className="flex-1 min-w-0 rounded-lg border border-border bg-card/60 overflow-hidden">
         <div className="flex items-center gap-2 border-b border-border px-3 py-1.5 text-[12px] font-medium">
-          <span>⚙️</span>
           <span>Agent working…</span>
           <span className="ml-auto font-mono text-[10px] text-muted-foreground">{elapsed}s</span>
         </div>
-        <ul className="px-3 py-2 space-y-1.5">
+        {/* Stage bar */}
+        <div className="flex items-center gap-1 px-3 pt-2">
+          {STAGES.map((s, i) => {
+            const done = i < activeIdx;
+            const active = i === activeIdx;
+            return (
+              <div key={s.id} className="flex flex-1 items-center gap-1">
+                <div
+                  className={`flex h-1.5 flex-1 items-center rounded-full ${
+                    done ? "bg-emerald-500" : active ? "bg-primary" : "bg-muted"
+                  }`}
+                />
+                <span
+                  className={`text-[10px] font-medium ${
+                    done ? "text-emerald-500" : active ? "text-primary" : "text-muted-foreground"
+                  }`}
+                >
+                  {s.label}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+        <ul className="px-3 py-2 space-y-1">
           <AnimatePresence initial={false}>
-            {steps.map((s) => (
-              <motion.li
-                key={s.id}
-                initial={{ opacity: 0, x: -6 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.18 }}
-                className="flex items-center gap-2 text-[12px] font-mono"
-              >
-                <span className="text-base leading-none">{s.icon}</span>
-                <span className="truncate flex-1">{s.label}</span>
-                {s.done ? (
-                  <CheckCircle2 className="h-3 w-3 flex-shrink-0 text-emerald-500" />
-                ) : (
-                  <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin text-primary" />
-                )}
-              </motion.li>
-            ))}
+            {activityParts.map((p, idx) => {
+              const name = p.toolName ?? p.type.replace(/^tool-/, "");
+              const target = p.input?.path ?? (p.input?.from ? `${p.input.from} → ${p.input.to}` : p.input?.pattern ?? "");
+              const done = p.state === "output-available";
+              return (
+                <motion.li
+                  key={`${idx}-${name}`}
+                  initial={{ opacity: 0, x: -6 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.18 }}
+                  className="flex items-center gap-2 text-[11px] font-mono"
+                >
+                  {done ? (
+                    <CheckCircle2 className="h-3 w-3 flex-shrink-0 text-emerald-500" />
+                  ) : (
+                    <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin text-primary" />
+                  )}
+                  <span className="text-muted-foreground">{name}</span>
+                  <span className="truncate">{target}</span>
+                </motion.li>
+              );
+            })}
           </AnimatePresence>
           {status === "streaming" && (
-            <motion.li
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="flex items-center gap-2 text-[12px] text-muted-foreground"
-            >
+            <li className="flex items-center gap-2 text-[11px] text-muted-foreground">
               <span className="text-base leading-none">💬</span>
               <span>Writing response…</span>
-            </motion.li>
+            </li>
           )}
         </ul>
       </div>
     </motion.div>
   );
 }
+
 
 type ToolPartLike = {
   type: string;
