@@ -23,7 +23,7 @@ import {
   XCircle,
   ArrowDown,
   History as HistoryIcon,
-} from "lucide-react";
+  Paperclip,
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ThreadList } from "./ThreadList";
 import { supabase } from "@/integrations/supabase/client";
