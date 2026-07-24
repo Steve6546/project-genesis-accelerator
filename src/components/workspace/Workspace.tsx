@@ -10,7 +10,6 @@ import { supabase } from "@/integrations/supabase/client";
 import { FileTree } from "./FileTree";
 import { EditorTabs } from "./EditorTabs";
 import { ChatPanel } from "./ChatPanel";
-import { ThreadList } from "./ThreadList";
 import { QuickOpen } from "./QuickOpen";
 import { MemoryDialog } from "./MemoryDialog";
 import { GitHubDialog } from "./GitHubDialog";
@@ -195,22 +194,19 @@ export function Workspace({ projectId, threadId }: { projectId: string; threadId
     />
   );
   const chatPanel = (
-    <>
-      <ThreadList projectId={projectId} activeThreadId={threadId} />
-      <ChatPanel
-        projectId={projectId}
-        threadId={threadId}
-        openFiles={tabs.map((t) => ({
-          path: t.path,
-          language: t.language,
-          content: t.content,
-        }))}
-        allFilePaths={allPaths}
-        activeFilePath={activeTab?.path}
-        onAgentWrite={applyAgentWrite}
-        onAgentTouchPath={refreshOpenByPath}
-      />
-    </>
+    <ChatPanel
+      projectId={projectId}
+      threadId={threadId}
+      openFiles={tabs.map((t) => ({
+        path: t.path,
+        language: t.language,
+        content: t.content,
+      }))}
+      allFilePaths={allPaths}
+      activeFilePath={activeTab?.path}
+      onAgentWrite={applyAgentWrite}
+      onAgentTouchPath={refreshOpenByPath}
+    />
   );
 
   return (

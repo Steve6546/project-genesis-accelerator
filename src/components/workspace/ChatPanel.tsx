@@ -22,7 +22,10 @@ import {
   CheckCircle2,
   XCircle,
   ArrowDown,
+  History as HistoryIcon,
 } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ThreadList } from "./ThreadList";
 import { supabase } from "@/integrations/supabase/client";
 import {
   listMessages,
@@ -317,6 +320,15 @@ export function ChatPanel({
     inputRef.current?.focus();
   }, [threadId, status]);
 
+  // Keep textarea height in sync with content (handles clear-after-submit and
+  // programmatic sets from mention/slash insertion).
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 200) + "px";
+  }, [input]);
+
   const seenToolCallsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     let touched = false;
@@ -453,6 +465,20 @@ export function ChatPanel({
               ctx: {activeFilePath}
             </span>
           )}
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                title="Chat history"
+                className="flex items-center gap-1 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                <HistoryIcon className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline text-[11px]">History</span>
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-80 p-0" sideOffset={6}>
+              <ThreadList projectId={projectId} activeThreadId={threadId} />
+            </PopoverContent>
+          </Popover>
           <button
             onClick={undoLast}
             disabled={isLoading || messages.length === 0}
@@ -757,7 +783,12 @@ function ChatComposer({
         <textarea
           ref={inputRef}
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => {
+            setInput(e.target.value);
+            const el = e.currentTarget;
+            el.style.height = "auto";
+            el.style.height = Math.min(el.scrollHeight, 200) + "px";
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !showSuggestions) {
               e.preventDefault();
@@ -765,8 +796,8 @@ function ChatComposer({
             }
           }}
           placeholder="Ask the agent… try /search, /refactor or @filename"
-          rows={2}
-          className="w-full resize-none bg-transparent px-3 py-2 pr-12 text-[14px] outline-none placeholder:text-muted-foreground overflow-y-auto"
+          rows={1}
+          className="w-full resize-none bg-transparent px-3 py-2 pr-12 text-[14px] outline-none placeholder:text-muted-foreground overflow-y-auto min-h-[44px] max-h-[200px] leading-relaxed"
         />
         <button
           onClick={submit}
