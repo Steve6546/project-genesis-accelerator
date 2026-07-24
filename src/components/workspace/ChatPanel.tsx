@@ -23,6 +23,7 @@ import {
   XCircle,
   ArrowDown,
   History as HistoryIcon,
+  Paperclip,
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ThreadList } from "./ThreadList";
@@ -378,12 +379,30 @@ export function ChatPanel({
     prevStatusRef.current = status;
   }, [status, qc, projectId]);
 
+  const [attachments, setAttachments] = useState<Array<{ url: string; mediaType: string; name: string }>>([]);
+
   const submit = async () => {
     const text = input.trim();
-    if (!text || isLoading) return;
+    if ((!text && attachments.length === 0) || isLoading) return;
     setInput("");
-    await sendMessage({ text });
+    const files = attachments;
+    setAttachments([]);
+    if (files.length > 0) {
+      const parts: UIMessage["parts"] = [
+        ...(text ? [{ type: "text" as const, text }] : []),
+        ...files.map((f) => ({
+          type: "file" as const,
+          url: f.url,
+          mediaType: f.mediaType,
+          filename: f.name,
+        })),
+      ];
+      await sendMessage({ role: "user", parts } as never);
+    } else {
+      await sendMessage({ text });
+    }
   };
+
 
   const onApplied = () => qc.invalidateQueries({ queryKey: ["files", projectId] });
 
@@ -675,6 +694,9 @@ export function ChatPanel({
         isLoading={isLoading}
         allFilePaths={allFilePaths}
         inputRef={inputRef}
+        attachments={attachments}
+        setAttachments={setAttachments}
+        threadId={threadId}
       />
     </div>
   );
@@ -689,6 +711,8 @@ const SLASH_COMMANDS: Array<{ cmd: string; desc: string; template: string }> = [
   { cmd: "/rollback", desc: "Undo the last agent change", template: "/rollback" },
 ];
 
+type Attachment = { url: string; mediaType: string; name: string };
+
 function ChatComposer({
   input,
   setInput,
@@ -696,6 +720,9 @@ function ChatComposer({
   isLoading,
   allFilePaths,
   inputRef,
+  attachments,
+  setAttachments,
+  threadId,
 }: {
   input: string;
   setInput: (v: string) => void;
@@ -703,7 +730,42 @@ function ChatComposer({
   isLoading: boolean;
   allFilePaths: string[];
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
+  attachments: Attachment[];
+  setAttachments: React.Dispatch<React.SetStateAction<Attachment[]>>;
+  threadId: string;
 }) {
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const uploadImage = async (file: File) => {
+    if (!file.type.startsWith("image/")) return;
+    if (file.size > 5 * 1024 * 1024) {
+      alert("Image too large (max 5 MB)");
+      return;
+    }
+    setUploading(true);
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      const uid = sess.session?.user.id;
+      if (!uid) throw new Error("Not signed in");
+      const ext = file.name.split(".").pop()?.toLowerCase() ?? "png";
+      const path = `${uid}/${threadId}/${crypto.randomUUID()}.${ext}`;
+      const up = await supabase.storage.from("chat-attachments").upload(path, file, {
+        contentType: file.type,
+        upsert: false,
+      });
+      if (up.error) throw up.error;
+      const signed = await supabase.storage.from("chat-attachments").createSignedUrl(path, 60 * 60 * 24 * 7);
+      if (signed.error || !signed.data?.signedUrl) throw signed.error ?? new Error("Sign URL failed");
+      setAttachments((prev) => [...prev, { url: signed.data.signedUrl, mediaType: file.type, name: file.name }]);
+    } catch (e) {
+      console.error(e);
+      alert(`Upload failed: ${(e as Error).message}`);
+    } finally {
+      setUploading(false);
+    }
+  };
+
   // Auto-grow textarea between 2 and 6 rows
   useEffect(() => {
     const el = inputRef.current;
@@ -750,6 +812,31 @@ function ChatComposer({
 
   return (
     <div className="border-t border-border p-2 sm:p-3">
+      {attachments.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-2">
+          {attachments.map((a, i) => (
+            <div key={i} className="relative group">
+              <img
+                src={a.url}
+                alt={a.name}
+                className="h-16 w-16 rounded border border-border object-cover"
+              />
+              <button
+                onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
+                className="absolute -right-1 -top-1 rounded-full bg-destructive p-0.5 text-destructive-foreground opacity-0 group-hover:opacity-100"
+                title="Remove"
+              >
+                <XCircle className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+          {uploading && (
+            <div className="flex h-16 w-16 items-center justify-center rounded border border-dashed border-border">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            </div>
+          )}
+        </div>
+      )}
       <div className="relative rounded-md border border-border bg-background focus-within:border-primary">
         {showSuggestions && (
           <div className="absolute bottom-full left-0 right-0 mb-1 max-h-56 overflow-y-auto rounded-md border border-border bg-popover shadow-lg z-10">
@@ -789,19 +876,49 @@ function ChatComposer({
             el.style.height = "auto";
             el.style.height = Math.min(el.scrollHeight, 200) + "px";
           }}
+          onPaste={(e) => {
+            const items = Array.from(e.clipboardData?.items ?? []);
+            const img = items.find((it) => it.type.startsWith("image/"));
+            if (img) {
+              const f = img.getAsFile();
+              if (f) {
+                e.preventDefault();
+                void uploadImage(f);
+              }
+            }
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !showSuggestions) {
               e.preventDefault();
               submit();
             }
           }}
-          placeholder="Ask the agent… try /search, /refactor or @filename"
+          placeholder="Ask the agent… try /search, /refactor or @filename (paste an image)"
           rows={1}
-          className="w-full resize-none bg-transparent px-3 py-2 pr-12 text-[14px] outline-none placeholder:text-muted-foreground overflow-y-auto min-h-[44px] max-h-[200px] leading-relaxed"
+          className="w-full resize-none bg-transparent px-3 py-2 pr-20 text-[14px] outline-none placeholder:text-muted-foreground overflow-y-auto min-h-[44px] max-h-[200px] leading-relaxed"
+        />
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          hidden
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void uploadImage(f);
+            e.target.value = "";
+          }}
         />
         <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading || isLoading}
+          className="absolute bottom-2 right-11 rounded-md p-2 text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:opacity-40"
+          title="Attach image"
+        >
+          <Paperclip className="h-4 w-4" />
+        </button>
+        <button
           onClick={submit}
-          disabled={!input.trim() || isLoading}
+          disabled={(!input.trim() && attachments.length === 0) || isLoading || uploading}
           className="absolute bottom-2 right-2 rounded-md bg-primary p-2 text-primary-foreground transition hover:opacity-90 disabled:opacity-40"
           title="Send (Enter)"
         >
@@ -811,6 +928,15 @@ function ChatComposer({
     </div>
   );
 }
+
+
+const STAGES = [
+  { id: "understand", label: "Understand" },
+  { id: "locate", label: "Locate" },
+  { id: "plan", label: "Plan" },
+  { id: "apply", label: "Apply" },
+  { id: "verify", label: "Verify" },
+] as const;
 
 function ThinkingBox({
   lastMessage,
@@ -827,43 +953,34 @@ function ThinkingBox({
     return () => clearInterval(id);
   }, []);
 
-  const steps = useMemo(() => {
-    const out: { id: string; icon: string; label: string; done: boolean }[] = [
-      { id: "init", icon: "🧠", label: "Analyzing your request", done: true },
-    ];
-    if (!lastMessage || lastMessage.role !== "assistant") return out;
+  // Infer the current stage from streamed parts.
+  const currentStage = useMemo<(typeof STAGES)[number]["id"]>(() => {
+    if (!lastMessage || lastMessage.role !== "assistant") return "understand";
+    const parts = (lastMessage.parts as Array<{ type: string; state?: string; toolName?: string }>) ?? [];
+    const tools = parts.filter((p) => p.type.startsWith("tool-"));
+    if (!tools.length) return status === "streaming" ? "plan" : "locate";
+    const hasWrite = tools.some((p) =>
+      ["write_file", "edit_file", "patch_file", "apply_patch", "create_file", "delete_file", "delete_path", "rename_file", "move_path"]
+        .includes(p.toolName ?? p.type.replace(/^tool-/, "")),
+    );
+    const hasVerify = tools.some((p) => {
+      const n = p.toolName ?? p.type.replace(/^tool-/, "");
+      return ["run_typecheck", "run_tests", "run_lint"].includes(n);
+    });
+    if (hasVerify) return "verify";
+    if (hasWrite) return "apply";
+    return "locate";
+  }, [lastMessage, status]);
+
+  const activeIdx = STAGES.findIndex((s) => s.id === currentStage);
+
+  const activityParts = useMemo(() => {
+    if (!lastMessage || lastMessage.role !== "assistant") return [];
     const parts = lastMessage.parts as Array<{
-      type: string;
-      state?: string;
-      toolName?: string;
+      type: string; state?: string; toolName?: string;
       input?: { path?: string; from?: string; to?: string; pattern?: string };
     }>;
-    const verbs: Record<string, { icon: string; label: (i: { path?: string; from?: string; to?: string; pattern?: string }) => string }> = {
-      read_file: { icon: "📖", label: (i) => `Reading: ${i.path ?? ""}` },
-      write_file: { icon: "📝", label: (i) => `Writing: ${i.path ?? ""}` },
-      edit_file: { icon: "✏️", label: (i) => `Patching: ${i.path ?? ""}` },
-      patch_file: { icon: "✏️", label: (i) => `Patching: ${i.path ?? ""}` },
-      delete_file: { icon: "🗑️", label: (i) => `Deleting: ${i.path ?? ""}` },
-      delete_path: { icon: "🗑️", label: (i) => `Deleting: ${i.path ?? ""}` },
-      rename_file: { icon: "🔀", label: (i) => `Renaming: ${i.from} → ${i.to}` },
-      move_path: { icon: "📦", label: (i) => `Moving: ${i.from} → ${i.to}` },
-      create_folder: { icon: "📁", label: (i) => `Creating folder: ${i.path ?? ""}` },
-      grep: { icon: "🔍", label: (i) => `Searching: ${i.pattern ?? ""}` },
-      search_project: { icon: "🔍", label: (i) => `Searching: ${i.pattern ?? ""}` },
-      list_files: { icon: "📂", label: () => `Listing project files` },
-    };
-    parts.forEach((p, idx) => {
-      if (!p.type.startsWith("tool-")) return;
-      const name = p.toolName ?? p.type.replace(/^tool-/, "");
-      const meta = verbs[name] ?? { icon: "⚙️", label: () => name };
-      out.push({
-        id: `${idx}-${name}`,
-        icon: meta.icon,
-        label: meta.label(p.input ?? {}),
-        done: p.state === "output-available",
-      });
-    });
-    return out;
+    return parts.filter((p) => p.type.startsWith("tool-")).slice(-6);
   }, [lastMessage]);
 
   return (
@@ -877,46 +994,70 @@ function ThinkingBox({
       </div>
       <div className="flex-1 min-w-0 rounded-lg border border-border bg-card/60 overflow-hidden">
         <div className="flex items-center gap-2 border-b border-border px-3 py-1.5 text-[12px] font-medium">
-          <span>⚙️</span>
           <span>Agent working…</span>
           <span className="ml-auto font-mono text-[10px] text-muted-foreground">{elapsed}s</span>
         </div>
-        <ul className="px-3 py-2 space-y-1.5">
+        {/* Stage bar */}
+        <div className="flex items-center gap-1 px-3 pt-2">
+          {STAGES.map((s, i) => {
+            const done = i < activeIdx;
+            const active = i === activeIdx;
+            return (
+              <div key={s.id} className="flex flex-1 items-center gap-1">
+                <div
+                  className={`flex h-1.5 flex-1 items-center rounded-full ${
+                    done ? "bg-emerald-500" : active ? "bg-primary" : "bg-muted"
+                  }`}
+                />
+                <span
+                  className={`text-[10px] font-medium ${
+                    done ? "text-emerald-500" : active ? "text-primary" : "text-muted-foreground"
+                  }`}
+                >
+                  {s.label}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+        <ul className="px-3 py-2 space-y-1">
           <AnimatePresence initial={false}>
-            {steps.map((s) => (
-              <motion.li
-                key={s.id}
-                initial={{ opacity: 0, x: -6 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.18 }}
-                className="flex items-center gap-2 text-[12px] font-mono"
-              >
-                <span className="text-base leading-none">{s.icon}</span>
-                <span className="truncate flex-1">{s.label}</span>
-                {s.done ? (
-                  <CheckCircle2 className="h-3 w-3 flex-shrink-0 text-emerald-500" />
-                ) : (
-                  <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin text-primary" />
-                )}
-              </motion.li>
-            ))}
+            {activityParts.map((p, idx) => {
+              const name = p.toolName ?? p.type.replace(/^tool-/, "");
+              const target = p.input?.path ?? (p.input?.from ? `${p.input.from} → ${p.input.to}` : p.input?.pattern ?? "");
+              const done = p.state === "output-available";
+              return (
+                <motion.li
+                  key={`${idx}-${name}`}
+                  initial={{ opacity: 0, x: -6 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.18 }}
+                  className="flex items-center gap-2 text-[11px] font-mono"
+                >
+                  {done ? (
+                    <CheckCircle2 className="h-3 w-3 flex-shrink-0 text-emerald-500" />
+                  ) : (
+                    <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin text-primary" />
+                  )}
+                  <span className="text-muted-foreground">{name}</span>
+                  <span className="truncate">{target}</span>
+                </motion.li>
+              );
+            })}
           </AnimatePresence>
           {status === "streaming" && (
-            <motion.li
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="flex items-center gap-2 text-[12px] text-muted-foreground"
-            >
+            <li className="flex items-center gap-2 text-[11px] text-muted-foreground">
               <span className="text-base leading-none">💬</span>
               <span>Writing response…</span>
-            </motion.li>
+            </li>
           )}
         </ul>
       </div>
     </motion.div>
   );
 }
+
 
 type ToolPartLike = {
   type: string;

@@ -474,6 +474,48 @@ function makeTools(
         }
       },
     }),
+    // --- Verification / sandbox tools (edge-runtime honest stubs) ---------
+    // The agent runs on Cloudflare Workers and cannot spawn child processes,
+    // so we can't invoke vitest / tsgo / eslint directly. Instead we return
+    // a structured "run locally" result plus a lightweight structural check
+    // on the requested paths so the agent still sees actionable feedback.
+    run_typecheck: tool({
+      description:
+        "Structural check on TS/TSX/JS/JSX/CSS files: balanced brackets, non-empty writes, valid JSON. Fast, runs in-worker. Use after write_file/edit_file to confirm the patch didn't corrupt the file. Not a full tsc — for full type-checking, run `bun tsgo --noEmit` locally.",
+      inputSchema: z.object({ paths: z.array(z.string()).min(1).max(50) }),
+      execute: async ({ paths }) => {
+        const { data: rows } = await supabase
+          .from("files")
+          .select("path, content")
+          .eq("project_id", projectId)
+          .eq("is_folder", false)
+          .in("path", paths);
+        if (!rows?.length) return { ok: false, error: "No matching files found" };
+        const { verifyPatches } = await import("@/lib/agent-engine.server");
+        const res = verifyPatches(rows.map((r) => ({ path: r.path, content: r.content })));
+        return { ok: res.ok, checked: res.checked, issues: res.issues };
+      },
+    }),
+    run_tests: tool({
+      description:
+        "NOT AVAILABLE in edge runtime. Returns a note explaining that vitest must be run locally. Only call this if the user explicitly asks for tests, so you can report the limitation.",
+      inputSchema: z.object({ pattern: z.string().optional() }),
+      execute: async ({ pattern }) => ({
+        ok: false,
+        error: "tests_run_locally",
+        note: `Cannot spawn vitest inside the Cloudflare Worker runtime. Run \`bun test${pattern ? ` ${pattern}` : ""}\` locally.`,
+      }),
+    }),
+    run_lint: tool({
+      description:
+        "NOT AVAILABLE in edge runtime. Returns a note explaining eslint must be run locally.",
+      inputSchema: z.object({ path: z.string().optional() }),
+      execute: async () => ({
+        ok: false,
+        error: "lint_run_locally",
+        note: "Cannot spawn eslint inside the Cloudflare Worker runtime. Run `bun eslint .` locally.",
+      }),
+    }),
   };
   // Aliases so the agent can use either name.
   return {
@@ -485,6 +527,7 @@ function makeTools(
     grep_search: tools.grep,
     list_dir: tools.list_files,
     symbol_search: tools.index_search,
+    verify_patches: tools.run_typecheck,
   };
 }
 
@@ -714,7 +757,7 @@ Every turn runs through 8 sequential stages. A pre-analysis stage has ALREADY pr
 4. READ CONTEXT — for each file you will edit, call read_file first. Never patch blind. Skip files not needed by the plan.
 5. PLAN — follow # Plan. If you must deviate, keep the change even smaller than the plan and explain in your final one-sentence report.
 6. APPLY PATCH — use edit_file (apply_patch) for targeted edits with unique find context; write_file only for new files or tiny rewrites. Every write is auto-snapshotted.
-7. VERIFY — after each write, re-read or grep to confirm the change landed and did not corrupt neighbouring code. If a tool errors, adjust and retry once.
+7. VERIFY — after writes, call run_typecheck on the paths you touched. On failure, read the reported files, fix the issue with ONE more edit_file, and re-run run_typecheck. If it still fails, stop and let the engine roll back — do not thrash further.
 8. SAVE — the engine persists snapshots, updates the Project Index, and refreshes memory automatically. Finish with ONE short sentence: "Updated X to do Y."
 
 # Hard rules
@@ -723,11 +766,13 @@ Every turn runs through 8 sequential stages. A pre-analysis stage has ALREADY pr
 - Keep existing imports, exports, types, and unrelated code intact.
 - Match the project's coding style (TypeScript strict, no \`any\`, named exports, Tailwind, shadcn).
 - One responsibility per file; split large files when they exceed reasonable size.
+- If the user attached an image, treat it as context (screenshot / mock / bug repro) and describe what you see before acting.
 - Finish with one report sentence: "Updated X to do Y."
 
 # Tools (Safety tiers)
 - No-permission reads: index_search (symbol_search) — PREFER THIS FIRST, read_file, list_files (list_dir), grep (grep_search), github_list_repos, github_read_file.
 - No-permission writes on a single file: write_file (create_file), edit_file (apply_patch, patch_file), create_folder, rename_file, move_path.
+- Verification: run_typecheck (verify_patches) — call after writes. run_tests / run_lint are stubs that only report "run locally"; do NOT rely on them for verification.
 - GitHub push (respects the linked repo only): github_commit_push. Use ONLY when the user explicitly asks to commit / push / sync to GitHub.
 - Require explicit user confirmation in this turn: delete_file, delete_path.
 
