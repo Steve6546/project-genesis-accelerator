@@ -462,6 +462,20 @@ export function ChatPanel({
               ctx: {activeFilePath}
             </span>
           )}
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                title="Chat history"
+                className="flex items-center gap-1 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                <History className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline text-[11px]">History</span>
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-80 p-0" sideOffset={6}>
+              <ThreadList projectId={projectId} activeThreadId={threadId} />
+            </PopoverContent>
+          </Popover>
           <button
             onClick={undoLast}
             disabled={isLoading || messages.length === 0}
