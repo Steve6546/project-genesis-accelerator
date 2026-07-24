@@ -22,7 +22,10 @@ import {
   CheckCircle2,
   XCircle,
   ArrowDown,
+  History as HistoryIcon,
 } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ThreadList } from "./ThreadList";
 import { supabase } from "@/integrations/supabase/client";
 import {
   listMessages,
