@@ -757,7 +757,12 @@ function ChatComposer({
         <textarea
           ref={inputRef}
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => {
+            setInput(e.target.value);
+            const el = e.currentTarget;
+            el.style.height = "auto";
+            el.style.height = Math.min(el.scrollHeight, 200) + "px";
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !showSuggestions) {
               e.preventDefault();
@@ -765,8 +770,8 @@ function ChatComposer({
             }
           }}
           placeholder="Ask the agent… try /search, /refactor or @filename"
-          rows={2}
-          className="w-full resize-none bg-transparent px-3 py-2 pr-12 text-[14px] outline-none placeholder:text-muted-foreground overflow-y-auto"
+          rows={1}
+          className="w-full resize-none bg-transparent px-3 py-2 pr-12 text-[14px] outline-none placeholder:text-muted-foreground overflow-y-auto min-h-[44px] max-h-[200px] leading-relaxed"
         />
         <button
           onClick={submit}
