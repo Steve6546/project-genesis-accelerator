@@ -317,6 +317,15 @@ export function ChatPanel({
     inputRef.current?.focus();
   }, [threadId, status]);
 
+  // Keep textarea height in sync with content (handles clear-after-submit and
+  // programmatic sets from mention/slash insertion).
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 200) + "px";
+  }, [input]);
+
   const seenToolCallsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     let touched = false;
