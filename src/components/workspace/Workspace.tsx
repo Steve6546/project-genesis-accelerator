@@ -195,22 +195,19 @@ export function Workspace({ projectId, threadId }: { projectId: string; threadId
     />
   );
   const chatPanel = (
-    <>
-      <ThreadList projectId={projectId} activeThreadId={threadId} />
-      <ChatPanel
-        projectId={projectId}
-        threadId={threadId}
-        openFiles={tabs.map((t) => ({
-          path: t.path,
-          language: t.language,
-          content: t.content,
-        }))}
-        allFilePaths={allPaths}
-        activeFilePath={activeTab?.path}
-        onAgentWrite={applyAgentWrite}
-        onAgentTouchPath={refreshOpenByPath}
-      />
-    </>
+    <ChatPanel
+      projectId={projectId}
+      threadId={threadId}
+      openFiles={tabs.map((t) => ({
+        path: t.path,
+        language: t.language,
+        content: t.content,
+      }))}
+      allFilePaths={allPaths}
+      activeFilePath={activeTab?.path}
+      onAgentWrite={applyAgentWrite}
+      onAgentTouchPath={refreshOpenByPath}
+    />
   );
 
   return (
