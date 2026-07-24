@@ -10,7 +10,6 @@ import { supabase } from "@/integrations/supabase/client";
 import { FileTree } from "./FileTree";
 import { EditorTabs } from "./EditorTabs";
 import { ChatPanel } from "./ChatPanel";
-import { ThreadList } from "./ThreadList";
 import { QuickOpen } from "./QuickOpen";
 import { MemoryDialog } from "./MemoryDialog";
 import { GitHubDialog } from "./GitHubDialog";
