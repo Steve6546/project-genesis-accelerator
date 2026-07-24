@@ -811,6 +811,31 @@ function ChatComposer({
 
   return (
     <div className="border-t border-border p-2 sm:p-3">
+      {attachments.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-2">
+          {attachments.map((a, i) => (
+            <div key={i} className="relative group">
+              <img
+                src={a.url}
+                alt={a.name}
+                className="h-16 w-16 rounded border border-border object-cover"
+              />
+              <button
+                onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
+                className="absolute -right-1 -top-1 rounded-full bg-destructive p-0.5 text-destructive-foreground opacity-0 group-hover:opacity-100"
+                title="Remove"
+              >
+                <XCircle className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+          {uploading && (
+            <div className="flex h-16 w-16 items-center justify-center rounded border border-dashed border-border">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            </div>
+          )}
+        </div>
+      )}
       <div className="relative rounded-md border border-border bg-background focus-within:border-primary">
         {showSuggestions && (
           <div className="absolute bottom-full left-0 right-0 mb-1 max-h-56 overflow-y-auto rounded-md border border-border bg-popover shadow-lg z-10">
@@ -850,19 +875,49 @@ function ChatComposer({
             el.style.height = "auto";
             el.style.height = Math.min(el.scrollHeight, 200) + "px";
           }}
+          onPaste={(e) => {
+            const items = Array.from(e.clipboardData?.items ?? []);
+            const img = items.find((it) => it.type.startsWith("image/"));
+            if (img) {
+              const f = img.getAsFile();
+              if (f) {
+                e.preventDefault();
+                void uploadImage(f);
+              }
+            }
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !showSuggestions) {
               e.preventDefault();
               submit();
             }
           }}
-          placeholder="Ask the agent… try /search, /refactor or @filename"
+          placeholder="Ask the agent… try /search, /refactor or @filename (paste an image)"
           rows={1}
-          className="w-full resize-none bg-transparent px-3 py-2 pr-12 text-[14px] outline-none placeholder:text-muted-foreground overflow-y-auto min-h-[44px] max-h-[200px] leading-relaxed"
+          className="w-full resize-none bg-transparent px-3 py-2 pr-20 text-[14px] outline-none placeholder:text-muted-foreground overflow-y-auto min-h-[44px] max-h-[200px] leading-relaxed"
+        />
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          hidden
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void uploadImage(f);
+            e.target.value = "";
+          }}
         />
         <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading || isLoading}
+          className="absolute bottom-2 right-11 rounded-md p-2 text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:opacity-40"
+          title="Attach image"
+        >
+          <Paperclip className="h-4 w-4" />
+        </button>
+        <button
           onClick={submit}
-          disabled={!input.trim() || isLoading}
+          disabled={(!input.trim() && attachments.length === 0) || isLoading || uploading}
           className="absolute bottom-2 right-2 rounded-md bg-primary p-2 text-primary-foreground transition hover:opacity-90 disabled:opacity-40"
           title="Send (Enter)"
         >
@@ -872,6 +927,7 @@ function ChatComposer({
     </div>
   );
 }
+
 
 const STAGES = [
   { id: "understand", label: "Understand" },
