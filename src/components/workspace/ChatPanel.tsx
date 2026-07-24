@@ -471,7 +471,7 @@ export function ChatPanel({
                 title="Chat history"
                 className="flex items-center gap-1 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
               >
-                <History className="h-3.5 w-3.5" />
+                <HistoryIcon className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline text-[11px]">History</span>
               </button>
             </PopoverTrigger>
