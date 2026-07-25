@@ -135,15 +135,17 @@ function ToolPart({
 }: {
   part: { type: string; state?: string; input?: unknown; output?: unknown; toolName?: string };
 }) {
-  const [open, setOpen] = useState(false);
   const toolName = part.toolName ?? part.type.replace(/^tool-/, "");
   const state = part.state ?? "";
   const running = state === "input-streaming" || state === "input-available";
   const output = part.output as
-    | { ok?: boolean; action?: string; path?: string; from?: string; to?: string; error?: string }
+    | { ok?: boolean; action?: string; path?: string; from?: string; to?: string; error?: string; stdout?: string; stderr?: string; summary?: string }
     | undefined;
   const failed = output && !output.ok;
   const done = output?.ok === true;
+  // Auto-expand while running so the user sees live progress; collapse once done.
+  const [openState, setOpenState] = useState<boolean | null>(null);
+  const open = openState ?? (running || failed);
 
   const verb: Record<string, string> = {
     read_file: "Read",
@@ -156,17 +158,22 @@ function ToolPart({
     move_path: "Moved",
     list_files: "Listed files",
     grep: "Searched",
+    run_typecheck: "Type-checked",
+    run_tests: "Ran tests",
+    run_lint: "Linted",
   };
   const input = part.input as { path?: string; from?: string; to?: string; pattern?: string } | undefined;
   const target =
     input?.path ?? (input?.from && input?.to ? `${input.from} → ${input.to}` : input?.pattern ?? "");
-  const summary = output?.ok
-    ? output.action === "renamed"
-      ? `Renamed ${output.from} → ${output.to}`
-      : `${verb[toolName] ?? toolName} ${output.path ?? target}`.trim()
-    : output && !output.ok
-      ? `${toolName} failed: ${output.error ?? "error"}`
-      : `${verb[toolName] ?? toolName}${target ? ` ${target}` : "…"}`;
+  const summary = output?.summary
+    ? output.summary
+    : output?.ok
+      ? output.action === "renamed"
+        ? `Renamed ${output.from} → ${output.to}`
+        : `${verb[toolName] ?? toolName} ${output.path ?? target}`.trim()
+      : output && !output.ok
+        ? `${toolName} failed: ${output.error ?? "error"}`
+        : `${verb[toolName] ?? toolName}${target ? ` ${target}` : "…"}`;
 
   const Icon = running ? Loader2 : failed ? XCircle : done ? CheckCircle2 : Wrench;
 
@@ -177,10 +184,12 @@ function ToolPart({
           ? "border-destructive/40 bg-destructive/5"
           : done
             ? "border-emerald-500/30 bg-emerald-500/5"
-            : "border-border bg-card/60"
+            : running
+              ? "border-primary/40 bg-primary/5"
+              : "border-border bg-card/60"
       }`}
     >
-      <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left">
+      <button onClick={() => setOpenState(!open)} className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left">
         {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
         <Icon
           className={`h-3.5 w-3.5 flex-shrink-0 ${
@@ -188,18 +197,35 @@ function ToolPart({
           }`}
         />
         <span className="truncate font-mono">{summary}</span>
+        {running && <span className="ml-auto text-[10px] text-primary">streaming…</span>}
       </button>
       {open && (
-        <div className="border-t border-border px-2.5 py-1.5 font-mono text-[11px] text-muted-foreground">
+        <div className="border-t border-border px-2.5 py-1.5 font-mono text-[11px] text-muted-foreground space-y-1.5">
           {part.input != null && (
-            <div className="mb-1">
-              <div className="opacity-60">input:</div>
-              <pre className="overflow-x-auto whitespace-pre-wrap break-all">
+            <div>
+              <div className="opacity-60">input{running ? " (streaming)" : ""}:</div>
+              <pre className="overflow-x-auto whitespace-pre-wrap break-all max-h-40">
                 {JSON.stringify(part.input, null, 2)}
               </pre>
             </div>
           )}
-          {output != null && (
+          {output?.stdout && (
+            <div>
+              <div className="opacity-60 text-emerald-500/80">stdout:</div>
+              <pre className="overflow-x-auto whitespace-pre-wrap break-all max-h-56 rounded bg-black/30 p-1.5 text-emerald-200/90">
+                {output.stdout}
+              </pre>
+            </div>
+          )}
+          {output?.stderr && (
+            <div>
+              <div className="opacity-60 text-destructive/80">stderr:</div>
+              <pre className="overflow-x-auto whitespace-pre-wrap break-all max-h-56 rounded bg-black/30 p-1.5 text-destructive/90">
+                {output.stderr}
+              </pre>
+            </div>
+          )}
+          {output != null && !output.stdout && !output.stderr && (
             <div>
               <div className="opacity-60">output:</div>
               <pre className="overflow-x-auto whitespace-pre-wrap break-all max-h-48">
@@ -207,11 +233,17 @@ function ToolPart({
               </pre>
             </div>
           )}
+          {done && output?.summary && (
+            <div className="mt-1 rounded border-l-2 border-emerald-500 bg-emerald-500/5 px-2 py-1 text-emerald-500/90 text-[11px]">
+              ✓ {output.summary}
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 }
+
 
 function formatTime(d: Date) {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -735,12 +767,13 @@ function ChatComposer({
   threadId: string;
 }) {
   const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const uploadImage = async (file: File) => {
     if (!file.type.startsWith("image/")) return;
     if (file.size > 5 * 1024 * 1024) {
-      alert("Image too large (max 5 MB)");
+      alert(`"${file.name}" is too large (max 5 MB)`);
       return;
     }
     setUploading(true);
@@ -765,6 +798,12 @@ function ChatComposer({
       setUploading(false);
     }
   };
+
+  const uploadMany = async (files: File[]) => {
+    const images = files.filter((f) => f.type.startsWith("image/"));
+    for (const f of images) await uploadImage(f);
+  };
+
 
   // Auto-grow textarea between 2 and 6 rows
   useEffect(() => {
