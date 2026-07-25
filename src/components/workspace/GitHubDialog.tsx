@@ -58,6 +58,9 @@ function GitHubBody({ projectId, onClose: _onClose }: { projectId: string; onClo
   const importFn = useServerFn(importRepo);
   const pushFn = useServerFn(pushChanges);
   const pullFn = useServerFn(pullLatest);
+  const previewFn = useServerFn(previewPush);
+  const [previewOpen, setPreviewOpen] = useState(false);
+
 
   const conn = useQuery({
     queryKey: ["github-conn", projectId],
@@ -83,9 +86,20 @@ function GitHubBody({ projectId, onClose: _onClose }: { projectId: string; onClo
 
   const pushMut = useMutation({
     mutationFn: () => pushFn({ data: { projectId, message: commitMsg || "Update from CodeMind" } }),
-    onSuccess: (r) => toast.success(`Pushed ${r.pushed} files — ${r.sha.slice(0, 7)}`),
+    onSuccess: (r) => {
+      toast.success(`Pushed ${r.pushed} files — ${r.sha.slice(0, 7)}`);
+      setPreviewOpen(false);
+      qc.invalidateQueries({ queryKey: ["github-conn", projectId] });
+    },
     onError: (e: Error) => toast.error(e.message),
   });
+
+  const previewQuery = useQuery({
+    queryKey: ["github-preview", projectId],
+    queryFn: () => previewFn({ data: { projectId } }),
+    enabled: previewOpen,
+  });
+
 
   const pullMut = useMutation({
     mutationFn: () => pullFn({ data: { projectId } }),
