@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Github, Download, Upload, Link2, Unlink, RefreshCw, Loader2 } from "lucide-react";
+import { Github, Download, Upload, Link2, Unlink, RefreshCw, Loader2, FileDiff, ChevronDown, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,8 +14,9 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import {
   listUserRepos, getConnection, saveConnection, deleteConnection,
-  importRepo, pushChanges, pullLatest,
+  importRepo, pushChanges, pullLatest, previewPush,
 } from "@/lib/github.functions";
+
 
 /**
  * GitHub sync dialog. Two panes:
