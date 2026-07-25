@@ -167,10 +167,14 @@ function GitHubBody({ projectId, onClose: _onClose }: { projectId: string; onClo
                 placeholder="Commit message"
                 className="h-8 text-sm"
               />
-              <Button size="sm" onClick={() => pushMut.mutate()} disabled={pushMut.isPending}>
-                {pushMut.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
-                Push all
+              <Button size="sm" variant="secondary" onClick={() => setPreviewOpen(true)}>
+                <FileDiff className="h-3.5 w-3.5" /> Preview
               </Button>
+              <Button size="sm" onClick={() => setPreviewOpen(true)} disabled={pushMut.isPending}>
+                {pushMut.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                Push
+              </Button>
+
             </div>
           </div>
         ) : (
