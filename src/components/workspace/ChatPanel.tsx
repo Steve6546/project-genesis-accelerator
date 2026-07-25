@@ -850,19 +850,48 @@ function ChatComposer({
   const showSuggestions = mentionMatches.length > 0 || slashMatches.length > 0;
 
   return (
-    <div className="border-t border-border p-2 sm:p-3">
+    <div
+      className={`border-t border-border p-2 sm:p-3 ${dragOver ? "bg-primary/5" : ""}`}
+      onDragEnter={(e) => {
+        if (Array.from(e.dataTransfer.types).includes("Files")) {
+          e.preventDefault();
+          setDragOver(true);
+        }
+      }}
+      onDragOver={(e) => {
+        if (Array.from(e.dataTransfer.types).includes("Files")) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+        }
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget === e.target) setDragOver(false);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragOver(false);
+        const files = Array.from(e.dataTransfer.files ?? []);
+        if (files.length) void uploadMany(files);
+      }}
+    >
+      {dragOver && (
+        <div className="mb-2 rounded-md border-2 border-dashed border-primary bg-primary/10 px-3 py-4 text-center text-[12px] font-medium text-primary">
+          Drop images to attach
+        </div>
+      )}
       {attachments.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-2">
           {attachments.map((a, i) => (
-            <div key={i} className="relative group">
+            <div key={i} className="group relative">
               <img
                 src={a.url}
                 alt={a.name}
+                title={a.name}
                 className="h-16 w-16 rounded border border-border object-cover"
               />
               <button
                 onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
-                className="absolute -right-1 -top-1 rounded-full bg-destructive p-0.5 text-destructive-foreground opacity-0 group-hover:opacity-100"
+                className="absolute -right-1.5 -top-1.5 rounded-full bg-destructive p-0.5 text-destructive-foreground shadow-md ring-2 ring-background transition hover:scale-110"
                 title="Remove"
               >
                 <XCircle className="h-3.5 w-3.5" />
@@ -917,13 +946,13 @@ function ChatComposer({
           }}
           onPaste={(e) => {
             const items = Array.from(e.clipboardData?.items ?? []);
-            const img = items.find((it) => it.type.startsWith("image/"));
-            if (img) {
-              const f = img.getAsFile();
-              if (f) {
-                e.preventDefault();
-                void uploadImage(f);
-              }
+            const images = items
+              .filter((it) => it.type.startsWith("image/"))
+              .map((it) => it.getAsFile())
+              .filter((f): f is File => !!f);
+            if (images.length) {
+              e.preventDefault();
+              void uploadMany(images);
             }
           }}
           onKeyDown={(e) => {
@@ -932,7 +961,7 @@ function ChatComposer({
               submit();
             }
           }}
-          placeholder="Ask the agent… try /search, /refactor or @filename (paste an image)"
+          placeholder="Ask the agent… try /search, /refactor or @filename (drop or paste images)"
           rows={1}
           className="w-full resize-none bg-transparent px-3 py-2 pr-20 text-[14px] outline-none placeholder:text-muted-foreground overflow-y-auto min-h-[44px] max-h-[200px] leading-relaxed"
         />
@@ -940,10 +969,11 @@ function ChatComposer({
           ref={fileInputRef}
           type="file"
           accept="image/*"
+          multiple
           hidden
           onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) void uploadImage(f);
+            const files = Array.from(e.target.files ?? []);
+            if (files.length) void uploadMany(files);
             e.target.value = "";
           }}
         />
@@ -951,7 +981,7 @@ function ChatComposer({
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading || isLoading}
           className="absolute bottom-2 right-11 rounded-md p-2 text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:opacity-40"
-          title="Attach image"
+          title="Attach images"
         >
           <Paperclip className="h-4 w-4" />
         </button>
@@ -967,6 +997,7 @@ function ChatComposer({
     </div>
   );
 }
+
 
 
 const STAGES = [
