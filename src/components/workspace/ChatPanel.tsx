@@ -135,15 +135,17 @@ function ToolPart({
 }: {
   part: { type: string; state?: string; input?: unknown; output?: unknown; toolName?: string };
 }) {
-  const [open, setOpen] = useState(false);
   const toolName = part.toolName ?? part.type.replace(/^tool-/, "");
   const state = part.state ?? "";
   const running = state === "input-streaming" || state === "input-available";
   const output = part.output as
-    | { ok?: boolean; action?: string; path?: string; from?: string; to?: string; error?: string }
+    | { ok?: boolean; action?: string; path?: string; from?: string; to?: string; error?: string; stdout?: string; stderr?: string; summary?: string }
     | undefined;
   const failed = output && !output.ok;
   const done = output?.ok === true;
+  // Auto-expand while running so the user sees live progress; collapse once done.
+  const [openState, setOpenState] = useState<boolean | null>(null);
+  const open = openState ?? (running || failed);
 
   const verb: Record<string, string> = {
     read_file: "Read",
@@ -156,17 +158,22 @@ function ToolPart({
     move_path: "Moved",
     list_files: "Listed files",
     grep: "Searched",
+    run_typecheck: "Type-checked",
+    run_tests: "Ran tests",
+    run_lint: "Linted",
   };
   const input = part.input as { path?: string; from?: string; to?: string; pattern?: string } | undefined;
   const target =
     input?.path ?? (input?.from && input?.to ? `${input.from} → ${input.to}` : input?.pattern ?? "");
-  const summary = output?.ok
-    ? output.action === "renamed"
-      ? `Renamed ${output.from} → ${output.to}`
-      : `${verb[toolName] ?? toolName} ${output.path ?? target}`.trim()
-    : output && !output.ok
-      ? `${toolName} failed: ${output.error ?? "error"}`
-      : `${verb[toolName] ?? toolName}${target ? ` ${target}` : "…"}`;
+  const summary = output?.summary
+    ? output.summary
+    : output?.ok
+      ? output.action === "renamed"
+        ? `Renamed ${output.from} → ${output.to}`
+        : `${verb[toolName] ?? toolName} ${output.path ?? target}`.trim()
+      : output && !output.ok
+        ? `${toolName} failed: ${output.error ?? "error"}`
+        : `${verb[toolName] ?? toolName}${target ? ` ${target}` : "…"}`;
 
   const Icon = running ? Loader2 : failed ? XCircle : done ? CheckCircle2 : Wrench;
 
@@ -177,10 +184,12 @@ function ToolPart({
           ? "border-destructive/40 bg-destructive/5"
           : done
             ? "border-emerald-500/30 bg-emerald-500/5"
-            : "border-border bg-card/60"
+            : running
+              ? "border-primary/40 bg-primary/5"
+              : "border-border bg-card/60"
       }`}
     >
-      <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left">
+      <button onClick={() => setOpenState(!open)} className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left">
         {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
         <Icon
           className={`h-3.5 w-3.5 flex-shrink-0 ${
@@ -188,18 +197,35 @@ function ToolPart({
           }`}
         />
         <span className="truncate font-mono">{summary}</span>
+        {running && <span className="ml-auto text-[10px] text-primary">streaming…</span>}
       </button>
       {open && (
-        <div className="border-t border-border px-2.5 py-1.5 font-mono text-[11px] text-muted-foreground">
+        <div className="border-t border-border px-2.5 py-1.5 font-mono text-[11px] text-muted-foreground space-y-1.5">
           {part.input != null && (
-            <div className="mb-1">
-              <div className="opacity-60">input:</div>
-              <pre className="overflow-x-auto whitespace-pre-wrap break-all">
+            <div>
+              <div className="opacity-60">input{running ? " (streaming)" : ""}:</div>
+              <pre className="overflow-x-auto whitespace-pre-wrap break-all max-h-40">
                 {JSON.stringify(part.input, null, 2)}
               </pre>
             </div>
           )}
-          {output != null && (
+          {output?.stdout && (
+            <div>
+              <div className="opacity-60 text-emerald-500/80">stdout:</div>
+              <pre className="overflow-x-auto whitespace-pre-wrap break-all max-h-56 rounded bg-black/30 p-1.5 text-emerald-200/90">
+                {output.stdout}
+              </pre>
+            </div>
+          )}
+          {output?.stderr && (
+            <div>
+              <div className="opacity-60 text-destructive/80">stderr:</div>
+              <pre className="overflow-x-auto whitespace-pre-wrap break-all max-h-56 rounded bg-black/30 p-1.5 text-destructive/90">
+                {output.stderr}
+              </pre>
+            </div>
+          )}
+          {output != null && !output.stdout && !output.stderr && (
             <div>
               <div className="opacity-60">output:</div>
               <pre className="overflow-x-auto whitespace-pre-wrap break-all max-h-48">
@@ -207,11 +233,17 @@ function ToolPart({
               </pre>
             </div>
           )}
+          {done && output?.summary && (
+            <div className="mt-1 rounded border-l-2 border-emerald-500 bg-emerald-500/5 px-2 py-1 text-emerald-500/90 text-[11px]">
+              ✓ {output.summary}
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 }
+
 
 function formatTime(d: Date) {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -735,12 +767,13 @@ function ChatComposer({
   threadId: string;
 }) {
   const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const uploadImage = async (file: File) => {
     if (!file.type.startsWith("image/")) return;
     if (file.size > 5 * 1024 * 1024) {
-      alert("Image too large (max 5 MB)");
+      alert(`"${file.name}" is too large (max 5 MB)`);
       return;
     }
     setUploading(true);
@@ -765,6 +798,12 @@ function ChatComposer({
       setUploading(false);
     }
   };
+
+  const uploadMany = async (files: File[]) => {
+    const images = files.filter((f) => f.type.startsWith("image/"));
+    for (const f of images) await uploadImage(f);
+  };
+
 
   // Auto-grow textarea between 2 and 6 rows
   useEffect(() => {
@@ -811,19 +850,48 @@ function ChatComposer({
   const showSuggestions = mentionMatches.length > 0 || slashMatches.length > 0;
 
   return (
-    <div className="border-t border-border p-2 sm:p-3">
+    <div
+      className={`border-t border-border p-2 sm:p-3 ${dragOver ? "bg-primary/5" : ""}`}
+      onDragEnter={(e) => {
+        if (Array.from(e.dataTransfer.types).includes("Files")) {
+          e.preventDefault();
+          setDragOver(true);
+        }
+      }}
+      onDragOver={(e) => {
+        if (Array.from(e.dataTransfer.types).includes("Files")) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+        }
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget === e.target) setDragOver(false);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragOver(false);
+        const files = Array.from(e.dataTransfer.files ?? []);
+        if (files.length) void uploadMany(files);
+      }}
+    >
+      {dragOver && (
+        <div className="mb-2 rounded-md border-2 border-dashed border-primary bg-primary/10 px-3 py-4 text-center text-[12px] font-medium text-primary">
+          Drop images to attach
+        </div>
+      )}
       {attachments.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-2">
           {attachments.map((a, i) => (
-            <div key={i} className="relative group">
+            <div key={i} className="group relative">
               <img
                 src={a.url}
                 alt={a.name}
+                title={a.name}
                 className="h-16 w-16 rounded border border-border object-cover"
               />
               <button
                 onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
-                className="absolute -right-1 -top-1 rounded-full bg-destructive p-0.5 text-destructive-foreground opacity-0 group-hover:opacity-100"
+                className="absolute -right-1.5 -top-1.5 rounded-full bg-destructive p-0.5 text-destructive-foreground shadow-md ring-2 ring-background transition hover:scale-110"
                 title="Remove"
               >
                 <XCircle className="h-3.5 w-3.5" />
@@ -878,13 +946,13 @@ function ChatComposer({
           }}
           onPaste={(e) => {
             const items = Array.from(e.clipboardData?.items ?? []);
-            const img = items.find((it) => it.type.startsWith("image/"));
-            if (img) {
-              const f = img.getAsFile();
-              if (f) {
-                e.preventDefault();
-                void uploadImage(f);
-              }
+            const images = items
+              .filter((it) => it.type.startsWith("image/"))
+              .map((it) => it.getAsFile())
+              .filter((f): f is File => !!f);
+            if (images.length) {
+              e.preventDefault();
+              void uploadMany(images);
             }
           }}
           onKeyDown={(e) => {
@@ -893,7 +961,7 @@ function ChatComposer({
               submit();
             }
           }}
-          placeholder="Ask the agent… try /search, /refactor or @filename (paste an image)"
+          placeholder="Ask the agent… try /search, /refactor or @filename (drop or paste images)"
           rows={1}
           className="w-full resize-none bg-transparent px-3 py-2 pr-20 text-[14px] outline-none placeholder:text-muted-foreground overflow-y-auto min-h-[44px] max-h-[200px] leading-relaxed"
         />
@@ -901,10 +969,11 @@ function ChatComposer({
           ref={fileInputRef}
           type="file"
           accept="image/*"
+          multiple
           hidden
           onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) void uploadImage(f);
+            const files = Array.from(e.target.files ?? []);
+            if (files.length) void uploadMany(files);
             e.target.value = "";
           }}
         />
@@ -912,7 +981,7 @@ function ChatComposer({
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading || isLoading}
           className="absolute bottom-2 right-11 rounded-md p-2 text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:opacity-40"
-          title="Attach image"
+          title="Attach images"
         >
           <Paperclip className="h-4 w-4" />
         </button>
@@ -928,6 +997,7 @@ function ChatComposer({
     </div>
   );
 }
+
 
 
 const STAGES = [

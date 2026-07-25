@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Github, Download, Upload, Link2, Unlink, RefreshCw, Loader2 } from "lucide-react";
+import { Github, Download, Upload, Link2, Unlink, RefreshCw, Loader2, FileDiff, ChevronDown, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,8 +14,9 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import {
   listUserRepos, getConnection, saveConnection, deleteConnection,
-  importRepo, pushChanges, pullLatest,
+  importRepo, pushChanges, pullLatest, previewPush,
 } from "@/lib/github.functions";
+
 
 /**
  * GitHub sync dialog. Two panes:
@@ -57,6 +58,9 @@ function GitHubBody({ projectId, onClose: _onClose }: { projectId: string; onClo
   const importFn = useServerFn(importRepo);
   const pushFn = useServerFn(pushChanges);
   const pullFn = useServerFn(pullLatest);
+  const previewFn = useServerFn(previewPush);
+  const [previewOpen, setPreviewOpen] = useState(false);
+
 
   const conn = useQuery({
     queryKey: ["github-conn", projectId],
@@ -82,9 +86,20 @@ function GitHubBody({ projectId, onClose: _onClose }: { projectId: string; onClo
 
   const pushMut = useMutation({
     mutationFn: () => pushFn({ data: { projectId, message: commitMsg || "Update from CodeMind" } }),
-    onSuccess: (r) => toast.success(`Pushed ${r.pushed} files — ${r.sha.slice(0, 7)}`),
+    onSuccess: (r) => {
+      toast.success(`Pushed ${r.pushed} files — ${r.sha.slice(0, 7)}`);
+      setPreviewOpen(false);
+      qc.invalidateQueries({ queryKey: ["github-conn", projectId] });
+    },
     onError: (e: Error) => toast.error(e.message),
   });
+
+  const previewQuery = useQuery({
+    queryKey: ["github-preview", projectId],
+    queryFn: () => previewFn({ data: { projectId } }),
+    enabled: previewOpen,
+  });
+
 
   const pullMut = useMutation({
     mutationFn: () => pullFn({ data: { projectId } }),
@@ -152,10 +167,14 @@ function GitHubBody({ projectId, onClose: _onClose }: { projectId: string; onClo
                 placeholder="Commit message"
                 className="h-8 text-sm"
               />
-              <Button size="sm" onClick={() => pushMut.mutate()} disabled={pushMut.isPending}>
-                {pushMut.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
-                Push all
+              <Button size="sm" variant="secondary" onClick={() => setPreviewOpen(true)}>
+                <FileDiff className="h-3.5 w-3.5" /> Preview
               </Button>
+              <Button size="sm" onClick={() => setPreviewOpen(true)} disabled={pushMut.isPending}>
+                {pushMut.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                Push
+              </Button>
+
             </div>
           </div>
         ) : (
@@ -231,6 +250,139 @@ function GitHubBody({ projectId, onClose: _onClose }: { projectId: string; onClo
           Auth: workspace GitHub connector. Commits use the connection's token.
         </p>
       </DialogFooter>
+
+      <DiffPreviewDialog
+        open={previewOpen}
+        onOpenChange={setPreviewOpen}
+        branch={conn.data?.default_branch ?? "main"}
+        commitMsg={commitMsg}
+        setCommitMsg={setCommitMsg}
+        loading={previewQuery.isLoading}
+        error={previewQuery.error as Error | null}
+        changes={previewQuery.data?.changes ?? []}
+        unchanged={previewQuery.data?.unchanged ?? 0}
+        pushing={pushMut.isPending}
+        onConfirm={() => pushMut.mutate()}
+      />
     </div>
   );
 }
+
+type DiffChange = {
+  path: string;
+  status: "added" | "modified" | "unchanged";
+  additions: number;
+  deletions: number;
+  diff: string;
+};
+
+function DiffPreviewDialog({
+  open, onOpenChange, branch, commitMsg, setCommitMsg,
+  loading, error, changes, unchanged, pushing, onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  branch: string;
+  commitMsg: string;
+  setCommitMsg: (v: string) => void;
+  loading: boolean;
+  error: Error | null;
+  changes: DiffChange[];
+  unchanged: number;
+  pushing: boolean;
+  onConfirm: () => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-3xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <FileDiff className="h-5 w-5" /> Review changes
+          </DialogTitle>
+          <DialogDescription>
+            Pushing to <span className="font-mono">{branch}</span>. Review each file below, then confirm.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Badge variant="outline">{changes.length} changed</Badge>
+          {unchanged > 0 && <Badge variant="outline" className="opacity-70">{unchanged} unchanged</Badge>}
+          <span className="ml-auto font-mono">branch: {branch}</span>
+        </div>
+
+        {loading && (
+          <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Computing diff…
+          </div>
+        )}
+        {error && <p className="text-sm text-destructive">{error.message}</p>}
+
+        {!loading && !error && changes.length === 0 && (
+          <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
+            No changes to push — local files match the remote branch.
+          </p>
+        )}
+
+        <ScrollArea className="h-80 rounded-md border border-border">
+          <ul className="divide-y divide-border">
+            {changes.map((c) => (
+              <DiffRow key={c.path} change={c} />
+            ))}
+          </ul>
+        </ScrollArea>
+
+        <div className="mt-2 flex items-center gap-2">
+          <Input
+            value={commitMsg}
+            onChange={(e) => setCommitMsg(e.target.value)}
+            placeholder="Commit message"
+            className="h-8 text-sm"
+          />
+        </div>
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button
+            onClick={onConfirm}
+            disabled={pushing || loading || changes.length === 0 || !commitMsg.trim()}
+          >
+            {pushing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+            Confirm & push {changes.length} file{changes.length === 1 ? "" : "s"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DiffRow({ change }: { change: DiffChange }) {
+  const [open, setOpen] = useState(false);
+  const statusColor =
+    change.status === "added" ? "text-emerald-500" : change.status === "modified" ? "text-amber-500" : "text-muted-foreground";
+  return (
+    <li>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-muted/50"
+      >
+        {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+        <span className={`text-[10px] font-semibold uppercase ${statusColor}`}>{change.status}</span>
+        <span className="flex-1 truncate font-mono text-sm">{change.path}</span>
+        <span className="font-mono text-[11px] text-emerald-500">+{change.additions}</span>
+        <span className="font-mono text-[11px] text-destructive">−{change.deletions}</span>
+      </button>
+      {open && (
+        <pre className="max-h-64 overflow-auto bg-black/40 px-3 py-2 font-mono text-[11px] leading-relaxed">
+          {change.diff.split("\n").map((line, i) => {
+            const cls = line.startsWith("+") && !line.startsWith("+++") ? "text-emerald-400"
+              : line.startsWith("-") && !line.startsWith("---") ? "text-destructive"
+              : line.startsWith("@@") ? "text-primary"
+              : "text-muted-foreground";
+            return <div key={i} className={cls}>{line || " "}</div>;
+          })}
+        </pre>
+      )}
+    </li>
+  );
+}
+
