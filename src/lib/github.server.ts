@@ -94,6 +94,35 @@ export async function getBlob(
   return gh(`/repos/${owner}/${repo}/git/blobs/${sha}`);
 }
 
+/** Fetch a file's raw content at a given ref. Returns null if the file doesn't exist on that ref (404). */
+export async function getFileContent(
+  owner: string,
+  repo: string,
+  path: string,
+  ref: string,
+): Promise<string | null> {
+  const { lovable, gh: ghKey } = requireKeys();
+  const url = `${GATEWAY_URL}/repos/${owner}/${repo}/contents/${encodeURI(path)}?ref=${encodeURIComponent(ref)}`;
+  const res = await fetch(url, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${lovable}`,
+      "X-Connection-Api-Key": ghKey,
+    },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`GitHub API ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const body = (await res.json()) as { content?: string; encoding?: string; size?: number };
+  if (!body.content) return null;
+  if ((body.size ?? 0) > 1_000_000) return null;
+  const raw = body.encoding === "base64"
+    ? Buffer.from(body.content, "base64").toString("utf8")
+    : body.content;
+  if (raw.includes("\u0000")) return null;
+  return raw;
+}
+
+
 /** Decode a blob to a UTF-8 string. Returns null for oversize/binary blobs. */
 export function decodeBlob(
   blob: { content: string; encoding: string; size: number },
