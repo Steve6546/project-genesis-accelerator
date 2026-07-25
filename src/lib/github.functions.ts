@@ -205,7 +205,92 @@ export const importRepo = createServerFn({ method: "POST" })
     return { imported, skipped, sha: head.commit.sha, truncated: tree.truncated };
   });
 
+export const previewPush = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: unknown) =>
+    z.object({
+      projectId: z.string().uuid(),
+      paths: z.array(z.string().max(500)).max(500).optional(),
+    }).parse(d),
+  )
+  .handler(async ({ context, data }) => {
+    const { getFileContent } = await import("./github.server");
+    const { createTwoFilesPatch } = await import("diff");
+
+    const { data: conn } = await context.supabase
+      .from("github_connections")
+      .select("repo_owner, repo_name, default_branch")
+      .eq("project_id", data.projectId)
+      .maybeSingle();
+    if (!conn) throw new Error("No GitHub repo connected to this project");
+
+    let query = context.supabase
+      .from("files")
+      .select("path, content, is_folder")
+      .eq("project_id", data.projectId)
+      .eq("is_folder", false);
+    if (data.paths?.length) query = query.in("path", data.paths);
+    const { data: files, error } = await query;
+    if (error) throw new Error(error.message);
+    if (!files?.length) return { branch: conn.default_branch, changes: [] };
+
+    const CONC = 8;
+    const changes: Array<{
+      path: string;
+      status: "added" | "modified" | "unchanged";
+      additions: number;
+      deletions: number;
+      diff: string;
+    }> = [];
+    for (let i = 0; i < files.length; i += CONC) {
+      const slice = files.slice(i, i + CONC);
+      const results = await Promise.all(
+        slice.map(async (f: { path: string; content: string }) => {
+          let remote: string | null = null;
+          try {
+            remote = await getFileContent(conn.repo_owner, conn.repo_name, f.path, conn.default_branch);
+          } catch (e) {
+            console.error(`[preview] ${f.path}`, e);
+          }
+          const local = f.content ?? "";
+          if (remote !== null && remote === local) {
+            return { path: f.path, status: "unchanged" as const, additions: 0, deletions: 0, diff: "" };
+          }
+          const patch = createTwoFilesPatch(
+            remote === null ? "/dev/null" : `a/${f.path}`,
+            `b/${f.path}`,
+            remote ?? "",
+            local,
+            "",
+            "",
+            { context: 3 },
+          );
+          let additions = 0;
+          let deletions = 0;
+          for (const line of patch.split("\n")) {
+            if (line.startsWith("+") && !line.startsWith("+++")) additions++;
+            else if (line.startsWith("-") && !line.startsWith("---")) deletions++;
+          }
+          return {
+            path: f.path,
+            status: (remote === null ? "added" : "modified") as "added" | "modified",
+            additions,
+            deletions,
+            diff: patch,
+          };
+        }),
+      );
+      changes.push(...results);
+    }
+    return {
+      branch: conn.default_branch,
+      changes: changes.filter((c) => c.status !== "unchanged"),
+      unchanged: changes.filter((c) => c.status === "unchanged").length,
+    };
+  });
+
 export const pushChanges = createServerFn({ method: "POST" })
+
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) =>
     z.object({
